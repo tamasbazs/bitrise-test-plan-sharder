@@ -37,6 +37,7 @@ myProj.parse(function (err) {
     const project = myProj.getFirstProject();
     const main_group_uuid = project.firstProject.mainGroup;
     const group = myProj.getPBXGroupByKey(main_group_uuid);
+    log('test')
     log('Target children: ', group.children)
     const target = group.children.find((child) => child.comment == TARGET);
     const target_uuid = target.value;
@@ -178,7 +179,7 @@ function updateTestPlan(shards){
 
             log('Writing Test Plan to file');
 
-            let testPlan = createTestPlan(testPlanJson.defaultOptions, [mainTarget].concat(shardTargets).concat(allDisabledShards));
+            let testPlan = copyTestPlan(testPlanJson.defaultOptions, testPlanJson.configurations, [mainTarget].concat(shardTargets).concat(allDisabledShards));
 
             fs.writeFileSync(shardName, testPlan);
 
@@ -222,6 +223,9 @@ function addTestPlans(main_group_uuid, shards){
         // Get the Scheme default options
         let defaultOptions = getDefaulOptions(schemeJson);
 
+        // Get the Scheme config options
+        let configOptions = getConfigOptions(schemeJson);
+
         let otherTargets = getOtherTargets(schemeJson);
         const otherTargetsShards = shard(otherTargets, SHARDS);
 
@@ -259,7 +263,7 @@ function addTestPlans(main_group_uuid, shards){
             });
             
             log('Writing Test Plan to file');
-            fs.writeFileSync(XCODE_PATH + shardName, createTestPlan(defaultOptions, [mainTarget].concat(shardTargets).concat(allDisabledShards)));
+            fs.writeFileSync(XCODE_PATH + shardName, createTestPlan(defaultOptions, configOptions, [mainTarget].concat(shardTargets).concat(allDisabledShards)));
 
             console.log('Test Plan Shard '+shardIndex+' Created:', shardName);
         })
@@ -458,6 +462,90 @@ function getDefaulOptions(schemeJson){
     return defaultOpts;
 }
 
+function getConfigOptions(schemeJson){
+    let environmentVariableEntries = [];
+    let commandLineArgumentEntries = [];
+    let undefinedBehaviorSanitizerEnabled = null;
+    let targetForVariableExpansion = null;
+    let codeCoverage = false;
+    if(schemeJson.Scheme && schemeJson.Scheme.LaunchAction){
+        let launchAction = schemeJson.Scheme.LaunchAction;
+        // CommandLineArguments
+        if(launchAction.CommandLineArguments){
+            let cmgArgs = launchAction.CommandLineArguments.CommandLineArgument;
+            if(cmgArgs instanceof Array){
+                cmgArgs.forEach((cmdArg) => {
+                    commandLineArgumentEntries.push({
+                        argument: cmdArg.argument,
+                        enabled: cmdArg.isEnabled == 'YES' ? true : false
+                    });
+                })
+            } else { // Single Element
+                commandLineArgumentEntries.push({
+                    argument: cmgArgs.argument,
+                    enabled: cmgArgs.isEnabled == 'YES' ? true : false
+                });
+            }
+        }
+        // EnvironmentVariables
+        if(launchAction.EnvironmentVariables){
+            let envVars = launchAction.EnvironmentVariables.EnvironmentVariable;
+            if(envVars instanceof Array){
+                envVars.forEach((envVar) => {
+                    environmentVariableEntries.push({
+                        key: envVar.key,
+                        value: envVar.value.replace(/\//g, "~"),
+                        enabled: envVar.isEnabled == 'YES' ? true : false
+                    });
+                })
+            } else { // Single Element
+                environmentVariableEntries.push({
+                    key: envVars.key,
+                    value: envVars.value.replace(/\//g, "~"),
+                    enabled: envVars.isEnabled == 'YES' ? true : false
+                });
+            }
+        }
+    }
+    if(schemeJson.Scheme && schemeJson.Scheme.TestAction){
+        let testAction = schemeJson.Scheme.TestAction;
+        if(testAction.codeCoverageEnabled){
+            codeCoverage = true;
+        }
+        // targetForVariableExpansion
+        if(testAction.MacroExpansion && testAction.MacroExpansion.BuildableReference){
+            let ref = testAction.MacroExpansion.BuildableReference;
+            targetForVariableExpansion = {
+                containerPath: ref.ReferencedContainer,
+                identifier: ref.BlueprintIdentifier,
+                name: ref.BlueprintName
+            };
+        }
+        // undefinedBehaviorSanitizerEnabled
+        if(testAction.enableUBSanitizer != null){
+            undefinedBehaviorSanitizerEnabled = testAction.enableUBSanitizer == 'YES' ? true : false;
+        }
+        
+    }
+    let defaultOpts = {};
+    if(commandLineArgumentEntries.length > 0){
+        defaultOpts.commandLineArgumentEntries = commandLineArgumentEntries;
+    }
+    if(environmentVariableEntries.length > 0){
+        defaultOpts.environmentVariableEntries = environmentVariableEntries;
+    }
+    if(targetForVariableExpansion != null){
+        defaultOpts.targetForVariableExpansion = targetForVariableExpansion;
+    }
+    if(undefinedBehaviorSanitizerEnabled != null){
+        defaultOpts.undefinedBehaviorSanitizerEnabled = undefinedBehaviorSanitizerEnabled;
+    }
+    if(codeCoverage){
+        defaultOpts.codeCoverage = codeCoverage;
+    }
+    return defaultOpts;
+}
+
 function addTestPlanToXCodeScheme(schemeJson, testPlans){
     if(schemeJson.Scheme && schemeJson.Scheme.TestAction){
         schemeJson.Scheme.TestAction.TestPlans = {
@@ -473,15 +561,25 @@ function addTestPlanToXCodeScheme(schemeJson, testPlans){
     return schemeJson;
 }
 
-function createTestPlan(defaultOptions, testTargets){
+function createTestPlan(defaultOptions, configOptions, testTargets){
     let testPlan = {
         "configurations" : [
             {
                 "id" : (''+uuid.v4()).toUpperCase(),
                 "name" : "Configuration 1",
-                "options" : {}
+                "options" : configOptions
             }
         ],
+        "defaultOptions" : defaultOptions,
+        "testTargets" : testTargets,
+        "version" : 1
+      }
+    return JSON.stringify(testPlan).replace(/~/g, '\\/');
+}
+
+function copyTestPlan(defaultOptions, configOptions, testTargets){
+    let testPlan = {
+        "configurations" : configOptions,
         "defaultOptions" : defaultOptions,
         "testTargets" : testTargets,
         "version" : 1

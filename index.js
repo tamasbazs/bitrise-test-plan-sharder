@@ -40,7 +40,7 @@ myProj.parse(function (err) {
     log('test')
     log('Target children: ', group.children)
     const target = group.children.find((child) => child.comment == TARGET);
-    const target_uuid = target.value;
+    const target_uuid = "E8E3B271202B5C14001DF038";
 
     const tests = getRecursiveTests(myProj, target_uuid, []);
     log('Tests Found in Target:',tests.length);
